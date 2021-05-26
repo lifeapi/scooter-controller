@@ -107,11 +107,12 @@
 
 */
 
-// Два Pin (SS и RST) допускают произвольное подключение и конфигурируются в коде.
-// !(SS - он же - SDA).
+
 #define SCK_PIN 13 // not use in sketch
 #define MISO_PIN 12 // not use in sketch
 #define MOSI_PIN 11 // not use in sketch
+// Два Pin (SS и RST) допускают произвольное подключение и конфигурируются в коде.
+// !(SS - он же - SDA).
 #define SS_PIN 10
 #define RST_PIN 9
 
@@ -132,34 +133,32 @@
 Adafruit_SSD1306 display(SDA_PIN);
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);  // Объект MFRC522C / reate MFRC522 instance.
-unsigned long uidDec, uidDecTemp;  // Для отображения номера карточки в десятичном формате.
-// **************************************************************
 
 
+enum State {
+  LOCK,
+  CONFIGURATION,
+  DRIVE
+};
 
+const unsigned long adminCardUID = 4198836864;
 
-int userCardCount = 5;
+unsigned long uidDec;  // Для отображения номера карточки в десятичном формате.
 
-boolean lock = true;
+const int userCardCount = 5;
 
 unsigned long CardUIDeEPROMread[userCardCount];
-
-unsigned long adminCardUID = 4198836864;
 
 int ARRAYindexUIDcard; // Индекс для массива CardUIDeEPROMread.
 
 int EEPROMstartAddr; // Стартовая ячейка памяти для записи / чтения EEPROM "Card UID".
 // -----------------------------
 
-int LockSwitch; // Замок / Переключатель / Блокиратор.
-
-
+State currentState;
 
 void setup() {
-  // Serial.begin(9600);
-
+  Serial.begin(9600);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // initialize with the I2C addr 0x3C (for the  0.96" 128X64 OLED LCD Display)I2C АДРЕС.
-
   SPI.begin(); //  инициализация SPI / Init SPI bus.
   mfrc522.PCD_Init(); // инициализация MFRC522 / Init MFRC522 card.
 
@@ -172,219 +171,242 @@ void setup() {
   pinMode(SDA_PIN, OUTPUT);
   pinMode(SCL_PIN, OUTPUT);
 
-
-  digitalWrite(LOCK_PIN, LOW);
-
-  buzzer(1);
   lockScooter();
-  EEPROMreadUIDcard(); // Запускаем функцию, для перезаписи массива CardUIDeEPROMread, данными из EEPROM.
+  EEPROMreadUIDcard();
+
   // Если хотите увидеть в Serial мониторе все записанные № Card-UID, раскомментируйте строку.
   for (int i = 0; i < userCardCount; i++) {
-    Serial.print(i);
-    Serial.print(" ---- ");
-    Serial.println(CardUIDeEPROMread[i]);
+    Serial.println(i + " -> " + CardUIDeEPROMread[i]);
   }
 
   //  for (int i = 0; i < 512; i++)EEPROM.write(i, 0); // EEPROM Clear / Очистить / стереть EEPROM.
 }
 
 void loop() {
+  switch (currentState) {
+    case LOCK:
+      if ( mfrc522.PICC_IsNewCardPresent() &&  mfrc522.PICC_ReadCardSerial()) {
+        // Выдача серийного номера карточки "UID".
+        for (byte i = 0; i < mfrc522.uid.size; i++) {
+          uidDec = uidDec * 256 + mfrc522.uid.uidByte[i];
+        }
 
-  // Поиск новой NFC карты / Look for new cards.
-  if ( ! mfrc522.PICC_IsNewCardPresent()) {
-    return;
-  }
+        if (uidDec == adminCardUID) {
+          currentState = CONFIGURATION
+          buzzer(3,500);
+        } else {
 
-  // Выбор карточки / Select one of the cards.
-  if ( ! mfrc522.PICC_ReadCardSerial()) {
-    return;
-  }
+        for (ARRAYindexUIDcard = 0; ARRAYindexUIDcard < userCardCount; ARRAYindexUIDcard++) {
+          if (CardUIDeEPROMread[ARRAYindexUIDcard] == uidDec) {
+            unlockScooter();
+            break;
+          }
+        }
+        }
+      }
+      break;
+    case CONFIGURATION: {
+        if ( mfrc522.PICC_IsNewCardPresent() &&  mfrc522.PICC_ReadCardSerial()) {
 
-  // Выдача серийного номера карточки "UID".
-  for (byte i = 0; i < mfrc522.uid.size; i++)
-  {
-    uidDecTemp = mfrc522.uid.uidByte[i];
-    uidDec = uidDec * 256 + uidDecTemp;
-  }
-  // ----------------------------------------
-
-  // Каждый раз подготавливаем дисплей для записи.
-  display.clearDisplay(); // Clear the buffer. / Очистить буфер дисплея.
-  display.setTextColor(WHITE); // Цвет текста.
-  display.setTextSize(2); // Размер текста (2).
-  display.setCursor(0, 0); // Устанавливаем курсор в колонку / Pixel 0, строку / Pixel 0.
-
-  // ----------------------------------------
-
-  // uidDec - Это полученный "Card UID" / уникальный номер NFC карты.
-
-  if (uidDec == adminCardUID || LockSwitch > 0) {
-    EEPROMwriteUIDcard(); // Запускаем функцию записи в EEPROM "Card UID" пользователей.
-  }
-  // ----------------------------------------
-
-
-  // Для режима управления.
-  if (LockSwitch == 0) // только если находимся в "режиме управления".
-  {
-    // Подготавливаемся для перебора массива CardUIDeEPROMread.
-    for (ARRAYindexUIDcard = 0; ARRAYindexUIDcard < userCardCount; ARRAYindexUIDcard++)
-    {
-
-      //  Перебираем весь массив CardUIDeEPROMread, Если поднесённая карта совпадёт с одной из 50  переменных массива.
-      if (CardUIDeEPROMread[ARRAYindexUIDcard] == uidDec) // Если обнаружено совпадение с поднесенной картой.
-      {
-        unlockScooter();
+        }
         break;
+      case DRIVE: {
+
+          break;
+        }
+
+      }
+      delay(100);
+
+
+      // Поиск новой NFC карты / Look for new cards.
+      if ( ! mfrc522.PICC_IsNewCardPresent()) {
+        return;
+      }
+
+      // Выбор карточки / Select one of the cards.
+      if ( ! mfrc522.PICC_ReadCardSerial()) {
+        return;
+      }
+
+      // Выдача серийного номера карточки "UID".
+      for (byte i = 0; i < mfrc522.uid.size; i++)
+      {
+        uidDecTemp = mfrc522.uid.uidByte[i];
+        uidDec = uidDec * 256 + uidDecTemp;
+      }
+      // ----------------------------------------
+
+      // Каждый раз подготавливаем дисплей для записи.
+      display.clearDisplay(); // Clear the buffer. / Очистить буфер дисплея.
+      display.setTextColor(WHITE); // Цвет текста.
+      display.setTextSize(2); // Размер текста (2).
+      display.setCursor(0, 0); // Устанавливаем курсор в колонку / Pixel 0, строку / Pixel 0.
+
+      // ----------------------------------------
+
+      // uidDec - Это полученный "Card UID" / уникальный номер NFC карты.
+
+      if (uidDec == adminCardUID || LockSwitch > 0) {
+        EEPROMwriteUIDcard(); // Запускаем функцию записи в EEPROM "Card UID" пользователей.
+      }
+      // ----------------------------------------
+
+
+      // Для режима управления.
+      if (LockSwitch == 0) // только если находимся в "режиме управления".
+      {
+        // Подготавливаемся для перебора массива CardUIDeEPROMread.
+        for (ARRAYindexUIDcard = 0; ARRAYindexUIDcard < userCardCount; ARRAYindexUIDcard++)
+        {
+
+          //  Перебираем весь массив CardUIDeEPROMread, Если поднесённая карта совпадёт с одной из 50  переменных массива.
+          if (CardUIDeEPROMread[ARRAYindexUIDcard] == uidDec) // Если обнаружено совпадение с поднесенной картой.
+          {
+            unlockScooter();
+            break;
+          }
+        }
+
+        // ARRAYindexUIDcard == 50 Означает, что мы перебрали весь массив от 0 до 49, и не обнаружили совпадений с поднесённой "Card UID".
+        // То есть поднесенная карта отсутствует в базе, выводим на дисплей "не найдена карта" и № "Card UID" карты.
+        if (ARRAYindexUIDcard == 50)display.println("NOT  Found CARD-UID"), display.println(uidDec), display.display();
+        delay(2000);
+        ARRAYindexUIDcard = 0;
+        DisplayWAiT_CARD(); // Запускаем функцию, заставка дисплея.
+      }
+  }
+
+
+
+  void EEPROMwriteUIDcard() {
+
+    if (LockSwitch == 0) // Если находились в режиме управления.
+    {
+      display.println("   START    RECORD   Card UID   CLIENT");
+      display.display();
+      buzzer(3);
+    }
+
+    // -------
+
+    // Для пропуска записи в ячейку памяти.
+    if (LockSwitch > 0) // Если находимся в "режиме записи".
+    {
+      if (uidDec == adminCardUID) // Если поднесена карта администратора.
+      {
+        display.println("   SKIP     RECORD   ");
+        display.setTextSize(3);
+        display.setCursor(40, 40);
+        display.println(EEPROMstartAddr / 5); // Выводим № пропущенной ячейки памяти.
+        display.display();
+
+        EEPROMstartAddr += 5; // Пропускаем запись в ячейку памяти, если не хотим записывать туда "Card UID".
+
+        buzzer(1);
+      } else // Иначе, то есть поднесена карта для записи.
+
+        // "Card UID" / № карты это "длинное число", которое не поместится в одну ячейку памяти EEPROM.
+        // Разрубим "длинное число" на 4 части, и кусками, запишем его в 4 ячейки EEPROM. Начинаем запись с адреса EEPROMstartAddr.
+
+      {
+        EEPROM.write(EEPROMstartAddr, uidDec & 0xFF);
+        EEPROM.write(EEPROMstartAddr + 1, (uidDec & 0xFF00) >> 8);
+        EEPROM.write(EEPROMstartAddr + 2, (uidDec & 0xFF0000) >> 16);
+        EEPROM.write(EEPROMstartAddr + 3, (uidDec & 0xFF000000) >> 24);
+        // Записали!.
+        delay(10);
+        // --
+        display.println("RECORD OK! IN MEMORY ");
+        display.setTextSize(3);
+        display.setCursor(50, 40);
+        display.println(EEPROMstartAddr / 5); // Выводим № записанной ячейки памяти.
+        display.display();
+
+        EEPROMstartAddr += 5; // Прибавляем 5 к стартовой ячейки записи.
+        buzzer(1);
       }
     }
 
-    // ARRAYindexUIDcard == 50 Означает, что мы перебрали весь массив от 0 до 49, и не обнаружили совпадений с поднесённой "Card UID".
-    // То есть поднесенная карта отсутствует в базе, выводим на дисплей "не найдена карта" и № "Card UID" карты.
-    if (ARRAYindexUIDcard == 50)display.println("NOT  Found CARD-UID"), display.println(uidDec), display.display();
-    delay(2000);
-    ARRAYindexUIDcard = 0;
-    DisplayWAiT_CARD(); // Запускаем функцию, заставка дисплея.
-  }
-}
+    LockSwitch++; // Разблокируем режим записи, и заблокируем режим управления.
 
-
-
-void EEPROMwriteUIDcard() {
-
-  if (LockSwitch == 0) // Если находились в режиме управления.
-  {
-    display.println("   START    RECORD   Card UID   CLIENT");
-    display.display();
-    buzzer(3);
-  }
-
-  // -------
-
-  // Для пропуска записи в ячейку памяти.
-  if (LockSwitch > 0) // Если находимся в "режиме записи".
-  {
-    if (uidDec == adminCardUID) // Если поднесена карта администратора.
+    if (EEPROMstartAddr / 5 == userCardCount) // если дошли до 5.
     {
-      display.println("   SKIP     RECORD   ");
-      display.setTextSize(3);
-      display.setCursor(40, 40);
-      display.println(EEPROMstartAddr / 5); // Выводим № пропущенной ячейки памяти.
+      delay(2000);
+      display.clearDisplay(); // Clear the buffer. / Очистить буфер.
+      display.setTextColor(WHITE); // Цвет текста.
+      display.setTextSize(3); // Размер текста (3).
+      display.setCursor(0, 0);
+      display.println("RECORD FINISH");
       display.display();
 
-      EEPROMstartAddr += 5; // Пропускаем запись в ячейку памяти, если не хотим записывать туда "Card UID".
 
-      buzzer(1);
-    } else // Иначе, то есть поднесена карта для записи.
+      buzzerWithTime(1, 2000);
 
-      // "Card UID" / № карты это "длинное число", которое не поместится в одну ячейку памяти EEPROM.
-      // Разрубим "длинное число" на 4 части, и кусками, запишем его в 4 ячейки EEPROM. Начинаем запись с адреса EEPROMstartAddr.
+      EEPROMstartAddr = 0;
+      uidDec = 0;
+      ARRAYindexUIDcard = 0;
 
-    {
-      EEPROM.write(EEPROMstartAddr, uidDec & 0xFF);
-      EEPROM.write(EEPROMstartAddr + 1, (uidDec & 0xFF00) >> 8);
-      EEPROM.write(EEPROMstartAddr + 2, (uidDec & 0xFF0000) >> 16);
-      EEPROM.write(EEPROMstartAddr + 3, (uidDec & 0xFF000000) >> 24);
-      // Записали!.
-      delay(10);
-      // --
-      display.println("RECORD OK! IN MEMORY ");
-      display.setTextSize(3);
-      display.setCursor(50, 40);
-      display.println(EEPROMstartAddr / 5); // Выводим № записанной ячейки памяти.
-      display.display();
-
-      EEPROMstartAddr += 5; // Прибавляем 5 к стартовой ячейки записи.
-      buzzer(1);
+      EEPROMreadUIDcard(); // Запускаем функцию, для перезаписи массива CardUIDeEPROMread, данными из EEPROM.
     }
   }
 
-  LockSwitch++; // Разблокируем режим записи, и заблокируем режим управления.
+  void EEPROMreadUIDcard() {
+    for (int i = 0; i < userCardCount; i++) {
+      byte val = EEPROM.read(EEPROMstartAddr + 3);
+      CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
+      val = EEPROM.read(EEPROMstartAddr + 2);
+      CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
+      val = EEPROM.read(EEPROMstartAddr + 1); // увеличиваем EEPROMstartAddr на 1.
+      CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
+      val = EEPROM.read(EEPROMstartAddr);
+      CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
 
-  if (EEPROMstartAddr / 5 == userCardCount) // если дошли до 5.
-  {
-    delay(2000);
-    display.clearDisplay(); // Clear the buffer. / Очистить буфер.
-    display.setTextColor(WHITE); // Цвет текста.
-    display.setTextSize(3); // Размер текста (3).
-    display.setCursor(0, 0);
-    display.println("RECORD FINISH");
-    display.display();
+      ARRAYindexUIDcard++; // увеличиваем на 1.
+      EEPROMstartAddr += 5; // увеличиваем на 5.
+    }
 
-
-    buzzerWithTime(1, 2000);
-
+    ARRAYindexUIDcard = 0;
     EEPROMstartAddr = 0;
     uidDec = 0;
-    ARRAYindexUIDcard = 0;
-
-    EEPROMreadUIDcard(); // Запускаем функцию, для перезаписи массива CardUIDeEPROMread, данными из EEPROM.
-  }
-}
-
-// -------------------------------------------
-
-
-// Делаем функцию, перезаписи массива CardUIDeEPROMread, данными из EEPROM.
-void EEPROMreadUIDcard()
-{
-  for (int i = 0; i < userCardCount; i++)
-  {
-    byte val = EEPROM.read(EEPROMstartAddr + 3);
-    CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
-    val = EEPROM.read(EEPROMstartAddr + 2);
-    CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
-    val = EEPROM.read(EEPROMstartAddr + 1); // увеличиваем EEPROMstartAddr на 1.
-    CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
-    val = EEPROM.read(EEPROMstartAddr);
-    CardUIDeEPROMread[ARRAYindexUIDcard] = (CardUIDeEPROMread[ARRAYindexUIDcard] << 8) | val;
-
-    ARRAYindexUIDcard++; // увеличиваем на 1.
-    EEPROMstartAddr += 5; // увеличиваем на 5.
+    LockSwitch = 0;
   }
 
-  ARRAYindexUIDcard = 0;
-  EEPROMstartAddr = 0;
-  uidDec = 0;
-  LockSwitch = 0;
-  DisplayWAiT_CARD();
-}
+  void unlockScooter() {
+    digitalWrite(LOCK_PIN, HIGH);
+    currentState = DRIVE;
 
-void unlockScooter() {
-  display.clearDisplay();
-  display.print("Разблокирован");
-  display.setTextSize(3);
-  display.display();
+    display.clearDisplay();
+    display.print("Разблокирован");
+    display.setTextSize(3);
+    display.display();
 
-  digitalWrite(LOCK_PIN, HIGH);
-  lock = false;
-
-  buzzerWithTime(1, 1000)
-  delay(1); // Дёргаем микроконтроллер.
-}
-
-void lockScooter() {
-  display.clearDisplay();
-  display.print("Заблокирован");
-  display.setTextSize(3);
-  display.display();
-
-  digitalWrite(LOCK_PIN, LOW);
-  lock = true;
-
-  buzzerWithTime(1, 1000)
-  delay(1); // Дёргаем микроконтроллер.
-}
-
-void buzzer(int count) {
-  buzzerWithTime(count, 400)
-}
-
-void buzzerWithTime(int count, int buzzerTime) {
-  for (int i = 0; i < count; i++) {
-    delay(400);
-    digitalWrite(PiezoPin, HIGH);
-    delay(buzzerTime);
-    digitalWrite(PiezoPin, LOW);
+    buzzerWithTime(1, 1000)
+    delay(1);
   }
-}
+
+  void lockScooter() {
+    digitalWrite(LOCK_PIN, LOW);
+    currentState = LOCK;
+
+    display.clearDisplay();
+    display.print("Заблокирован");
+    display.setTextSize(3);
+    display.display();
+
+    buzzerWithTime(1, 1000)
+    delay(1);
+  }
+
+  void buzzer(int count) {
+    buzzerWithTime(count, 400)
+  }
+
+  void buzzerWithTime(int count, int buzzerTime) {
+    for (int i = 0; i < count; i++) {
+      delay(buzzerTime / 2);
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(buzzerTime);
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }

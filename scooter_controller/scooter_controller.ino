@@ -5,6 +5,8 @@
 #include <Adafruit_SSD1306.h>
 #include <MFRC522.h>
 
+#include <buzzer.h>
+
 #define SCK_PIN 13 // not use in sketch
 #define MISO_PIN 12 // not use in sketch
 #define MOSI_PIN 11 // not use in sketch
@@ -26,6 +28,8 @@
 #define SDA_PIN A4
 #define SCL_PIN A5
 
+Buzzer buzzer(BUZZER_PIN);
+
 Adafruit_SSD1306 display(SDA_PIN);
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);  // Объект MFRC522C / reate MFRC522 instance.
@@ -37,19 +41,16 @@ enum State {
 };
 
 const unsigned long adminCardUID = 4198836864;
+const uint8_t userCardCount = 5;
 
 unsigned long currentCardUID;
-
-const int userCardCount = 5;
-
 unsigned long userCards[userCardCount];
+uint8_t currentUserCardIndex;
 
-int currentUserCardIndex; // Индекс для массива userCards.
-
-int EEPROMstartAddr; // Стартовая ячейка памяти для записи / чтения EEPROM "Card UID".
-// -----------------------------
+int EEPROMstartAddr;
 
 State currentState;
+
 
 void setup() {
   Serial.begin(9600);
@@ -57,7 +58,6 @@ void setup() {
   SPI.begin(); //  инициализация SPI / Init SPI bus.
   mfrc522.PCD_Init(); // инициализация MFRC522 / Init MFRC522 card.
 
-  pinMode(BUZZER_PIN, OUTPUT);
   pinMode(LOCK_PIN, OUTPUT);
   pinMode(LED_1_PIN, OUTPUT);
   pinMode(LED_2_PIN, OUTPUT);
@@ -74,11 +74,10 @@ void setup() {
     Serial.println((i + 1) + " -> " + userCards[i]);
   }
 }
-// реализация простого меню
-// с реакцией на кнопки
 
 void loop() {
-  switch (currentState) {
+ buzzer.buzzerProcessing();
+   switch (currentState) {
     case LOCK:
       if ( mfrc522.PICC_IsNewCardPresent() &&  mfrc522.PICC_ReadCardSerial()) {
         readUid();
@@ -87,17 +86,15 @@ void loop() {
           EEPROMstartAddr = 0;
           clearDisplay();
           display.println("   START    RECORD   Card UID   CLIENT");
-          buzzer(3, 500);
+          buzzer.on(3, 500);
         } else {
           for (currentUserCardIndex = 0; currentUserCardIndex < userCardCount; currentUserCardIndex++) {
             if (userCards[currentUserCardIndex] == currentCardUID) {
               unlockScooter();
-              break;
+              return;
             }
           }
-          if (currentState == LOCK) {
-            unknownCard();
-          }
+          unknownCard();
         }
       }
       break;
@@ -111,9 +108,7 @@ void loop() {
 
           break;
         }
-
       }
-      delay(100);
   }
 
   void EEPROMwriteUIDcard() {
@@ -125,10 +120,9 @@ void loop() {
       display.println(EEPROMstartAddr / 5); // Выводим № пропущенной ячейки памяти.
       display.display();
       EEPROMstartAddr += 5; // Пропускаем запись в ячейку памяти, если не хотим записывать туда "Card UID".
-      buzzer(1);
+      buzzer.on(1);
     } else {
-      // "Card UID" / № карты это "длинное число", которое не поместится в одну ячейку памяти EEPROM.
-      // Разрубим "длинное число" на 4 части, и кусками, запишем его в 4 ячейки EEPROM. Начинаем запись с адреса EEPROMstartAddr.
+      // "Card UID" / № карты - long, занимает 4 байта - нужно резать на 4 части EEPROM.
       EEPROM.write(EEPROMstartAddr, currentCardUID & 0xFF);
       EEPROM.write(EEPROMstartAddr + 1, (currentCardUID & 0xFF00) >> 8);
       EEPROM.write(EEPROMstartAddr + 2, (currentCardUID & 0xFF0000) >> 16);
@@ -140,7 +134,7 @@ void loop() {
       display.println(EEPROMstartAddr / 5); // Выводим № записанной ячейки памяти.
       display.display();
       EEPROMstartAddr += 5; // Прибавляем 5 к стартовой ячейки записи.
-      buzzer(1);
+      buzzer.on(1);
     }
   }
 
@@ -149,7 +143,7 @@ void loop() {
     display.setTextSize(3); // Размер текста (3).
     display.println("RECORD FINISH");
     display.display();
-    buzzerWithTime(1);
+    buzzer.on(1);
     EEPROMreadUIDcard(); // Запускаем функцию, для перезаписи массива userCards, данными из EEPROM.
   }
   currentCardUID = 0;
@@ -185,7 +179,7 @@ void unlockScooter() {
   display.setTextSize(3);
   display.display();
 
-  buzzerWithTime(1)
+  buzzer.on(1)
 }
 
 void unknownCard() {
@@ -193,7 +187,7 @@ void unknownCard() {
   display.print("Неизвестная карта");
   display.setTextSize(3);
   display.display();
-  buzzerWithTime(1, 2000)
+  buzzer.on(1, 2000)
 }
 
 void lockScooter() {
@@ -205,11 +199,7 @@ void lockScooter() {
   display.setTextSize(3);
   display.display();
 
-  buzzerWithTime(1, 1000)
-}
-
-void buzzer(int count) {
-  buzzerWithTime(count, 400)
+  buzzer.on(1, 1000)
 }
 
 void readUid() {
@@ -218,12 +208,4 @@ void readUid() {
     currentCardUID = currentCardUID * 256 + mfrc522.uid.uidByte[i];
   }
 }
-
-void buzzerWithTime(int count, int buzzerTime) {
-  for (int i = 0; i < count; i++) {
-    delay(buzzerTime >> 2);
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(buzzerTime);
-    digitalWrite(BUZZER_PIN, LOW);
-  }
 }

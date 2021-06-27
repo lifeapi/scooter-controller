@@ -6,8 +6,7 @@ class Buzzer
 public:
     Buzzer(uint8_t pin);
     void buzzerProcessing();
-    void on(int count);
-    void on(int count, int buzzerTime);
+    void on(int count = 1, int buzzerTime = 400);
 
 private:
     uint8_t _pin;

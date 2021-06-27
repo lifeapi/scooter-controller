@@ -1,7 +1,6 @@
-#include <buzzer.h>
+#include "buzzer.h"
 
-Buzzer::Buzzer(uint8_t pin)
-{
+Buzzer::Buzzer(uint8_t pin) {
     _pin = pin;
 
     buzzerRingCount = 0;
@@ -15,55 +14,40 @@ Buzzer::Buzzer(uint8_t pin)
     pinMode(_pin, OUTPUT);
 }
 
-void buzzerProcessing()
-{
-    if (buzzerPaused)
-    {
-        if (millis() - buzzerPauseTimer >= buzzerPausePeriod)
-        {
+void Buzzer::buzzerProcessing() {
+    if (buzzerPaused) {
+        if (millis() - buzzerPauseTimer >= buzzerPausePeriod) {
             buzzerPaused = false;
         }
-    }
-    else
-    {
-        if (!buzzerEnabled && buzzerTimer > 0)
-        {
+    } else {
+        if (!buzzerEnabled && buzzerTimer > 0) {
             buzzerOn();
         }
     }
-    if (buzzerEnabled && (millis() - buzzerTimer >= buzzerPeriod))
-    {
+    if (buzzerEnabled && (millis() - buzzerTimer >= buzzerPeriod)) {
         buzzerOff();
     }
 }
 
-void on(int count)
-{
-    on(count, 400)
-}
-
-void on(int count, int buzzerTime)
-{
+void Buzzer::on(int count, int buzzerTime) {
     buzzerRingCount = count;
     buzzerPeriod = buzzerTime;
-    buzzerTimer = millis() + buzzerPeriod;
+    buzzerTimer = millis();
     buzzerPausePeriod = buzzerRingCount > 1 ? buzzerTime >> 1 : 0;
 }
 
-void buzzerOn()
-{
-    digitalWrite(BUZZER_PIN, HIGH);
+void Buzzer::buzzerOn() {
+    digitalWrite(_pin, LOW);
     buzzerEnabled = true;
     buzzerPaused = false;
 }
 
-void buzzerOff()
-{
-    digitalWrite(BUZZER_PIN, LOW);
+void Buzzer::buzzerOff() {
+    digitalWrite(_pin, HIGH);
     buzzerEnabled = false;
     buzzerRingCount--;
     buzzerPaused = buzzerRingCount > 0;
-    if (buzzerPaused)
-    {
+    if (buzzerPaused) {
         buzzerPauseTimer = millis() + buzzerPausePeriod;
     }
+}

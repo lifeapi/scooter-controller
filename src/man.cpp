@@ -3,9 +3,9 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <MFRC522.h>
+#include <RTClib.h>
 #include <SPI.h>
 #include <Wire.h>
-#include <microDS3231.h>
 
 #include "buzzer.h"
 
@@ -35,6 +35,7 @@
 #define MENU_ITEM_COUNT 4
 
 #define CARD_READER_PERIOD 500
+#define UPDATE_TIME_PERIOD 1000
 #define DISPLAY_WIDTH 128
 #define DISPLAY_HEIGHT 64
 
@@ -44,7 +45,7 @@ Adafruit_SSD1306 display(SDA_PIN);
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
-MicroDS3231 rtc;
+RTC_DS3231 rtc;
 
 enum State {
     LOCK,
@@ -53,18 +54,27 @@ enum State {
     DRIVE
 };
 
+const char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+String temp;
+String time;
+String fullTime;
+String weekDay;
+
+uint32_t driveModeTimer = 0;
+uint32_t updateTimeTimer = 0;
 uint32_t cardReaderTimer = 0;
 uint32_t resetDisplayToStateTimer = 0;
 
 uint32_t resetDisplayToStatePeriod = 0;
 
-unsigned long currentCardUID;
+unsigned long currentCardUID = 0;
 unsigned long userCards[USER_CARD_COUNT];
 
 uint8_t currentUserCardIndex;
 
 int EEPROMstartAddr;
-int currentCardIndex;
+int currentCardIndex = 0;
 
 const int eepromStartAddrUID = 0;
 const int eepromStartAddrConfig = USER_CARD_COUNT * 5;
@@ -81,7 +91,7 @@ void clearDisplay();
 void unlockScooter();
 void unknownCard();
 void lockScooter();
-void readUid();
+boolean readUid();
 void initCardAdresses();
 void increaseCardAdresses();
 void displayLock();
@@ -91,18 +101,29 @@ void displayManagement();
 void displayAdmin(uint8_t currentCardIndex);
 void resetDisplayToStateAfterTimeout(uint32_t timeout);
 void processDisplayToStateAfterTimeout();
-void printTime();
+void updateTime();
 ////////////////////////
 
 void setup() {
     Serial.begin(9600);
     display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C(0x3D) (for the  0.96" 128X64 OLED LCD Display)I2C АДРЕС.
-    SPI.begin();                                //  инициализация SPI / Init SPI bus.
-    mfrc522.PCD_Init();                         // инициализация MFRC522 / Init MFRC522 card.
+    SPI.begin();                                //  Init SPI bus.
+    mfrc522.PCD_Init();                         // Init MFRC522 card.
     Wire.begin();
 
-    if (rtc.lostPower()) {          //  при потере питания
-        rtc.setTime(COMPILE_TIME);  // установить время компиляции
+    Serial.print("Compiled: ");
+    Serial.print(__DATE__);
+    Serial.print(" ");
+    Serial.println(__TIME__);
+
+    if (!rtc.begin()) {
+        Serial.println("Couldn't find RTC");
+        Serial.flush();
+        abort();
+    }
+
+    if (rtc.lostPower()) {
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
 
     pinMode(LOCK_PIN, OUTPUT);
@@ -117,7 +138,6 @@ void setup() {
     // Since the buffer is intialized with an Adafruit splashscreen
     // internally, this will display the splashscreen.
     display.display();
-    //  delay(2000);
 
     // Clear the buffer.
     display.clearDisplay();
@@ -129,28 +149,21 @@ void setup() {
     for (int i = 0; i < USER_CARD_COUNT; i++) {
         Serial.println((i + 1) + " -> " + userCards[i]);
     }
-    
 }
 
-
-void printTime() {
-  Serial.print(rtc.getHours());
-  Serial.print(":");
-  Serial.print(rtc.getMinutes());
-  Serial.print(":");
-  Serial.print(rtc.getSeconds());
-  Serial.print(" ");
-  Serial.print(rtc.getDay());
-  Serial.print(" ");
-  Serial.print(rtc.getDate());
-  Serial.print("/");
-  Serial.print(rtc.getMonth());
-  Serial.print("/");
-  Serial.println(rtc.getYear());
+void updateTime() {
+    if (millis() - updateTimeTimer >= UPDATE_TIME_PERIOD) {
+        updateTimeTimer = millis();
+        DateTime now = rtc.now();
+        time = now.hour() + ':' + now.minute();
+        fullTime = now.hour() + ':' + now.minute() + ':' + now.second() + ' ' + now.day() + '.' + now.month() + '.' + now.year();
+        weekDay = daysOfTheWeek[now.dayOfTheWeek()];
+        temp = rtc.getTemperature();
+    }
 }
 
 void loop() {
-    printTime();
+    updateTime();
     buzzer.buzzerProcessing();
     processDisplayToStateAfterTimeout();
     switch (currentState) {
@@ -177,11 +190,12 @@ void loop() {
             break;
         case CONFIGURATION: {
             if (millis() - cardReaderTimer >= CARD_READER_PERIOD) {
-                cardReaderTimer  = millis();
+                cardReaderTimer = millis();
                 displayAdmin(currentCardIndex);
                 if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-                    readUid();
-                    EEPROMwriteUIDcard();
+                    if (readUid()) {
+                        EEPROMwriteUIDcard();
+                    }
                 }
             }
             break;
@@ -211,9 +225,9 @@ void EEPROMwriteUIDcard() {
         display.println("RECORD OK! IN MEMORY ");
     }
 
-    display.setTextSize(3);
-   // display.setCursor(400, 40);
-    display.println(currentCardIndex);  // Выводим № записанной ячейки памяти.
+    display.setTextSize(2);
+    // display.setCursor(400, 40);
+    display.println(currentCardIndex+1);  // Выводим № записанной ячейки памяти.
     display.display();
     increaseCardAdresses();
     buzzer.on();
@@ -282,10 +296,17 @@ void lockScooter() {
     buzzer.on();
 }
 
-void readUid() {
+boolean readUid() {
+    unsigned long tempCurrentCardUID = 0;
     currentCardUID = 0;
     for (byte i = 0; i < mfrc522.uid.size; i++) {
-        currentCardUID = currentCardUID * 256 + mfrc522.uid.uidByte[i];
+        tempCurrentCardUID = tempCurrentCardUID * 256 + mfrc522.uid.uidByte[i];
+    }
+    if (tempCurrentCardUID == currentCardUID) {
+        return false;
+    } else {
+        currentCardUID = tempCurrentCardUID;
+        return true;
     }
 }
 
@@ -303,7 +324,7 @@ void displayLock() {
     clearDisplay();
     display.setCursor(20, 20);
     display.setTextSize(4);
-    display.print("LOCK");
+    display.print("LOCK"+1);
     display.display();
 }
 
@@ -317,19 +338,24 @@ void displayUK() {
 }
 
 void displayDrive() {
-    clearDisplay();
-    display.setCursor(20, 20);
-    display.setTextSize(3);
-    display.println("DRIVE");
-    display.setTextSize(2);
-    display.print(rtc.getHours() + ":" + rtc.getMinutes());
-    display.display();
+    if (millis() - driveModeTimer >= UPDATE_TIME_PERIOD) {
+        Serial.println(" -> " + time);
+        driveModeTimer = millis();
+        clearDisplay();
+        display.setCursor(20, 20);
+        display.setTextSize(3);
+        display.println(time);
+        display.setTextSize(2);
+        display.print("Drive");
+        display.display();
+    }
 }
 
 void displayManagement() {
     clearDisplay();
+    display.setTextSize(1);
+    display.println(time);
     display.setTextSize(2);
-    display.println(rtc.getHours() + ":" + rtc.getMinutes());
     display.println("LOCK");
     display.println("DAY LIGTH");
     display.println("HIGTH LIGTH");
@@ -343,7 +369,7 @@ void displayAdmin(uint8_t currentCardIndex) {
     display.println("ADMIN MODE");
     display.setTextSize(1);
     display.println("Add user card");
-    display.println(currentCardIndex + " / " + USER_CARD_COUNT);
+    display.print(currentCardIndex + " / " + USER_CARD_COUNT);
     display.display();
 }
 

@@ -1,13 +1,18 @@
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+//#include <Adafruit_GFX.h>
+//#include <Adafruit_SSD1306.h>
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <MFRC522.h>
 #include <RTClib.h>
-#include <SPI.h>
-#include <Wire.h>
+//#include <SPI.h>
+//#include <Wire.h>
+//#include <microWire.h>
 
 #include "buzzer.h"
+
+//#define USE_MICRO_WIRE
+#define OLED_SPI_SPEED 4000000ul
+#include <GyverOLED.h>
 
 #define SCK_PIN 13   // not use in sketch
 #define MISO_PIN 12  // not use in sketch
@@ -41,7 +46,9 @@
 
 Buzzer buzzer(BUZZER_PIN);
 
-Adafruit_SSD1306 display(SDA_PIN);
+//Adafruit_SSD1306 display(SDA_PIN);
+
+GyverOLED<SSD1306_128x64> oled;
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
@@ -54,7 +61,7 @@ enum State {
     DRIVE
 };
 
-const char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+const char daysOfTheWeek[7][12] = {"Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
 
 String temp;
 String time;
@@ -106,12 +113,12 @@ void updateTime();
 
 void setup() {
     Serial.begin(9600);
-    display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C(0x3D) (for the  0.96" 128X64 OLED LCD Display)I2C АДРЕС.
-    SPI.begin();                                //  Init SPI bus.
-    mfrc522.PCD_Init();                         // Init MFRC522 card.
+    SPI.begin();
+    mfrc522.PCD_Init();
     Wire.begin();
+    oled.init();
 
-    Serial.print("Compiled: ");
+    Serial.print("Compiled time: ");
     Serial.print(__DATE__);
     Serial.print(" ");
     Serial.println(__TIME__);
@@ -130,24 +137,19 @@ void setup() {
     pinMode(LED_1_PIN, OUTPUT);
     pinMode(LED_2_PIN, OUTPUT);
     pinMode(LED_3_PIN, OUTPUT);
-
     pinMode(SDA_PIN, OUTPUT);
     pinMode(SCL_PIN, OUTPUT);
 
-    // Show image buffer on the display hardware.
-    // Since the buffer is intialized with an Adafruit splashscreen
-    // internally, this will display the splashscreen.
-    display.display();
-
-    // Clear the buffer.
-    display.clearDisplay();
+    clearDisplay();
 
     lockScooter();
     EEPROMreadUIDcard();
 
     Serial.println("Saved cards: ");
     for (int i = 0; i < USER_CARD_COUNT; i++) {
-        Serial.println((i + 1) + " -> " + userCards[i]);
+        Serial.print(i + 1, DEC);
+        Serial.print(" -> ");
+        Serial.println(userCards[i]);
     }
 }
 
@@ -155,10 +157,10 @@ void updateTime() {
     if (millis() - updateTimeTimer >= UPDATE_TIME_PERIOD) {
         updateTimeTimer = millis();
         DateTime now = rtc.now();
-        time = now.hour() + ':' + now.minute();
-        fullTime = now.hour() + ':' + now.minute() + ':' + now.second() + ' ' + now.day() + '.' + now.month() + '.' + now.year();
+        time = String(now.hour()) + ":" + String(now.minute());
+        fullTime = String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + " " + String(now.day()) + "." + String(now.month()) + "." + String(now.year());
         weekDay = daysOfTheWeek[now.dayOfTheWeek()];
-        temp = rtc.getTemperature();
+        temp = String(rtc.getTemperature(), 2);
     }
 }
 
@@ -214,7 +216,9 @@ void loop() {
 void EEPROMwriteUIDcard() {
     clearDisplay();
     if (currentCardUID == ADMIN_CARD_UID) {
-        display.println("   SKIP     RECORD   ");
+        oled.println("Карта №");
+        oled.print(currentCardIndex + 1, DEC);
+        oled.println(" пропущенна");
     } else {
         // "Card UID" / № карты - long, занимает 4 байта - нужно резать на 4 части EEPROM.
         EEPROM.write(EEPROMstartAddr, currentCardUID & 0xFF);
@@ -222,21 +226,21 @@ void EEPROMwriteUIDcard() {
         EEPROM.write(EEPROMstartAddr + 2, (currentCardUID & 0xFF0000) >> 16);
         EEPROM.write(EEPROMstartAddr + 3, (currentCardUID & 0xFF000000) >> 24);
 
-        display.println("RECORD OK! IN MEMORY ");
+        oled.print("Карта №");
+
+        oled.print(currentCardIndex + 1, DEC);
+        oled.println(" записанна");
     }
 
-    display.setTextSize(2);
-    // display.setCursor(400, 40);
-    display.println(currentCardIndex+1);  // Выводим № записанной ячейки памяти.
-    display.display();
+    oled.update();
     increaseCardAdresses();
     buzzer.on();
 
     if (currentCardIndex == USER_CARD_COUNT) {  // если записали все карты
-        clearDisplay();
-        display.setTextSize(3);  // Размер текста (3).
-        display.println("RECORD FINISH");
-        display.display();
+        delay(1000);
+        oled.println("Запись окончена");
+
+        oled.update();
         EEPROMreadUIDcard();  // Запускаем функцию, для перезаписи массива userCards, данными из EEPROM.
         lockScooter();
     }
@@ -271,10 +275,9 @@ void EEPROMreadConfiguration() {
 }
 
 void clearDisplay() {
-    display.clearDisplay();
-    display.setTextColor(WHITE);
-    display.setTextSize(2);
-    display.setCursor(0, 0);
+    oled.home();
+    oled.clear();
+    oled.update();
 }
 
 void unlockScooter() {
@@ -322,19 +325,18 @@ void increaseCardAdresses() {
 
 void displayLock() {
     clearDisplay();
-    display.setCursor(20, 20);
-    display.setTextSize(4);
-    display.print("LOCK"+1);
-    display.display();
+    oled.setScale(3);
+    oled.print("Заблокированно");
+    oled.update();
 }
 
 void displayUK() {
     clearDisplay();
-    display.setTextSize(2);
-    display.setCursor(0, 20);
-    display.println("Unknown");
-    display.println("card");
-    display.display();
+    oled.setScale(2);
+    oled.setCursor(0, 20);
+    oled.println("Unknown");
+    oled.println("card");
+    oled.update();
 }
 
 void displayDrive() {
@@ -342,35 +344,38 @@ void displayDrive() {
         Serial.println(" -> " + time);
         driveModeTimer = millis();
         clearDisplay();
-        display.setCursor(20, 20);
-        display.setTextSize(3);
-        display.println(time);
-        display.setTextSize(2);
-        display.print("Drive");
-        display.display();
+        oled.setCursor(20, 20);
+        oled.setScale(3);
+        oled.println(time);
+        oled.setScale(2);
+        oled.print("Поездка");
+        oled.update();
     }
 }
 
 void displayManagement() {
     clearDisplay();
-    display.setTextSize(1);
-    display.println(time);
-    display.setTextSize(2);
-    display.println("LOCK");
-    display.println("DAY LIGTH");
-    display.println("HIGTH LIGTH");
-    display.println("LED");
-    display.display();
+    oled.setScale(1);
+    oled.println(time);
+    oled.setScale(2);
+    oled.println("Блокировка");
+    oled.println("ДХО");
+    oled.println("Свет");
+    oled.println("Подсветка");
+    oled.update();
 }
 
 void displayAdmin(uint8_t currentCardIndex) {
     clearDisplay();
-    display.setTextSize(2);
-    display.println("ADMIN MODE");
-    display.setTextSize(1);
-    display.println("Add user card");
-    display.print(currentCardIndex + " / " + USER_CARD_COUNT);
-    display.display();
+    oled.setScale(1);
+    oled.println("Режим администратора");
+    oled.fastLineH(0, 16, 16);
+    oled.setScale(1);
+    oled.println("Запись карты");
+    oled.print(currentCardIndex + 1, DEC);
+    oled.print(" / ");
+    oled.print(USER_CARD_COUNT, DEC);
+    oled.update();
 }
 
 void resetDisplayToStateAfterTimeout(uint32_t timeout) {

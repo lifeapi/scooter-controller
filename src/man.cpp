@@ -30,7 +30,7 @@ String temp;
 String time;
 String fullTime;
 String weekDay;
-String firmwareDate = "Sep 20 2021 00:28:08";  // TODO
+String firmwareDate;
 
 uint32_t driveModeTimer = 0;
 uint32_t updateTimeTimer = 0;
@@ -60,6 +60,8 @@ bool updateDisplay = true;
 void EEPROMwriteUIDcard();
 void EEPROMreadUIDcard();
 void EEPROMreadConfiguration();
+void writeConfigurationValue(uint8_t menuItem);
+void applyConfiguration();
 void clearDisplay();
 void unlockScooter();
 void unknownCard();
@@ -78,9 +80,7 @@ void callAction();
 
 void callExit();
 void callLock();
-void callDRL();
-void callLight();
-void callBacklight();
+void processBooleanMenuItem(uint8_t index);
 void callInformation();
 
 void initNavigation();
@@ -105,6 +105,15 @@ void setup() {
     Serial.print(__DATE__);
     Serial.print(F(" "));
     Serial.println(__TIME__);
+
+    DateTime fd = DateTime(F(__DATE__), F(__TIME__));
+    String d = String(fd.day());
+    String m = String(fd.month());
+    String y = String(fd.year());
+    String h = String(fd.hour());
+    String mm = String(fd.minute());
+    String s = String(fd.second());
+    firmwareDate = d + "." + m + "." + y + " " + h + ":" + mm + ":" + s;
 
     if (!rtc.begin()) {
         Serial.println(F("Couldn't find RTC"));
@@ -131,10 +140,14 @@ void setup() {
     btnOk.setType(LOW_PULL);
     btnDown.setType(LOW_PULL);
 
+    // инициализация всех пинов нагрузки
+    digitalWrite(LOCK_PIN, HIGH);
+
     clearDisplay();
     lockScooter();
     EEPROMreadUIDcard();
     EEPROMreadConfiguration();
+    applyConfiguration();
 
     Serial.println(F("Saved cards: "));
     for (int i = 0; i < USER_CARD_COUNT; i++) {
@@ -226,7 +239,6 @@ void loop() {
             } else {
                 displayDrive();
             }
-
             break;
         }
     }
@@ -287,9 +299,16 @@ void EEPROMreadConfiguration() {  // чтение конфигурации
     }
 }
 
-void writeConfigurationValue(uint8_t menuItem, uint8_t value) {
+void writeConfigurationValue(uint8_t menuItem) {
     int eepromAddr = menuItem * 2 + USER_CARD_COUNT * 5;
-    EEPROM.write(eepromAddr, value);
+    EEPROM.write(eepromAddr, configuration[menuItem]);
+    applyConfiguration();
+}
+
+void applyConfiguration() {
+    digitalWrite(LED_1_PIN, configuration[2]);
+    digitalWrite(LED_2_PIN, configuration[3]);
+    digitalWrite(LED_3_PIN, configuration[4]);
 }
 
 void clearDisplay() {
@@ -299,9 +318,9 @@ void clearDisplay() {
 }
 
 void unlockScooter() {
-    digitalWrite(LOCK_PIN, HIGH);
+    digitalWrite(LOCK_PIN, LOW);
     currentState = DRIVE;
-    driveModeTimer = 0;  // tODO
+    driveModeTimer = 0;
     buzzer.on();
     clearDisplay();
 }
@@ -313,7 +332,7 @@ void unknownCard() {
 }
 
 void lockScooter() {
-    digitalWrite(LOCK_PIN, LOW);
+    digitalWrite(LOCK_PIN, HIGH);
     currentState = LOCK;
     buzzer.on(2, 300);
 }
@@ -453,15 +472,15 @@ void callAction() {
             break;
         }
         case 2: {  // ДХО
-            callDRL();
+            processBooleanMenuItem(currentMenuItem);
             break;
         }
         case 3: {  // Свет
-            callLight();
+            processBooleanMenuItem(currentMenuItem);
             break;
         }
         case 4: {  // Подсветка
-            callBacklight();
+            processBooleanMenuItem(currentMenuItem);
             break;
         }
         case 5: {  // Информация
@@ -520,48 +539,20 @@ void callLock() {
     selectedMenuItem = -1;
 }
 
-void callDRL() {
+void processBooleanMenuItem(uint8_t index) {
     if (updateDisplay) {
         updateDisplay = false;
     } else {
         if (btnOk.isClick()) {
             needUpdateDisplay();
             selectedMenuItem = -1;
-            uint8_t value = configuration[2] == 0 ? 1 : 0;
-            writeConfigurationValue(2, value);
-        }
-
-        return;
-    }
-}
-
-void callLight() {
-    if (updateDisplay) {
-        updateDisplay = false;
-    } else {
-        if (btnOk.isClick()) {
+            writeConfigurationValue(index);
+            buzzer.on();
+        } else if (btnUp.isClick() || btnDown.isClick()) {
             needUpdateDisplay();
-            selectedMenuItem = -1;
-            uint8_t value = configuration[3] == 0 ? 1 : 0;
-            writeConfigurationValue(3, value);
+            configuration[index] = configuration[index] == 0 ? 1 : 0;
+            applyConfiguration();
         }
-
-        return;
-    }
-}
-
-void callBacklight() {
-    if (updateDisplay) {
-        updateDisplay = false;
-    } else {
-        if (btnOk.isClick()) {
-            needUpdateDisplay();
-            selectedMenuItem = -1;
-            uint8_t value = configuration[4] == 0 ? 1 : 0;
-            writeConfigurationValue(4, value);
-        }
-
-        return;
     }
 }
 
@@ -578,12 +569,12 @@ void callInformation() {
     }
     clearDisplay();
     oled.setScale(1);
-    oled.print(F("Время"));
-    oled.println(fullTime);
+    oled.print(F("Время "));
+    oled.println(fullTime);  // не выводиться
     oled.println(weekDay);
-    oled.print(F("Темп"));
+    oled.print(F("Темп "));
     oled.println(temp);
-    oled.print(F("Прошивка"));
+    oled.print(F("Прошивка "));
     oled.println(firmwareDate);
     oled.update();
 }
